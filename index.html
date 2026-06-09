@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Neural Canvas</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#0a0a0f;color:#e0e0e0;font-family:'Segoe UI',system-ui,sans-serif;overflow:hidden;height:100vh;display:flex;flex-direction:column}
+header{padding:12px 20px;background:rgba(15,15,25,.95);border-bottom:1px solid rgba(100,140,255,.15);display:flex;align-items:center;gap:16px;z-index:10;backdrop-filter:blur(10px)}
+header h1{font-size:1.1rem;background:linear-gradient(135deg,#6af,#a8f);-webkit-background-clip:text;-webkit-text-fill-color:transparent;font-weight:700}
+header .stats{font-size:.78rem;color:#888;margin-left:auto;display:flex;gap:16px}
+.stats span{color:#6af;font-weight:600}
+.controls{display:flex;gap:8px;align-items:center}
+.controls button,.controls select{padding:5px 12px;border:1px solid rgba(100,140,255,.3);background:rgba(100,140,255,.1);color:#aaf;border-radius:6px;cursor:pointer;font-size:.75rem;transition:all .2s}
+.controls button:hover{background:rgba(100,140,255,.25)}
+.controls button.active{background:rgba(100,200,140,.2);border-color:rgba(100,200,140,.5);color:#8f8}
+.main{display:flex;flex:1;overflow:hidden}
+.viz{width:300px;background:rgba(10,10,20,.8);border-right:1px solid rgba(100,140,255,.1);position:relative;overflow:hidden}
+canvas{width:100%;height:100%}
+.canvas-area{flex:1;display:flex}
+canvas-area canvas{flex:1}
+</style>
+</head>
+<body>
+<header>
+<h1>🧠 Neural Canvas</h1>
+<div class="controls">
+<select id="arch"><option value="2,8,8,1">2→8→8→1</option><option value="2,16,8,1" selected>2→16→8→1</option><option value="2,32,16,8,1">Deep</option></select>
+<button id="bTrain">▶ Train</button>
+<button id="bPause">⏸ Pause</button>
+<button id="bReset">↺ Reset</button>
+<button id="bClear">✕ Clear</button>
+</div>
+<div class="stats">Epoch:<span id="ep">0</span> Loss:<span id="ls">—</span> FPS:<span id="fp">0</span></div>
+</header>
+<div class="main">
+<div class="viz"><canvas id="nnC"></canvas></div>
+<div class="canvas-area">
+<div style="flex:1;position:relative"><canvas id="dC"></canvas><div style="position:absolute;bottom:8px;left:8px;font-size:.65rem;color:rgba(150,150,200,.5);background:rgba(0,0,0,.5);padding:3px 8px;border-radius:4px">✏️ Draw (+ green, right-click - red)</div></div>
+<div style="flex:1;position:relative"><canvas id="oC"></canvas><div style="position:absolute;bottom:8px;right:8px;font-size:.65rem;color:rgba(150,150,200,.5);background:rgba(0,0,0,.5);padding:3px 8px;border-radius:4px">🧠 Output</div></div>
+</div>
+</div>
+<script>
+const RES=32;
+class NN{
+  constructor(a){this.a=a;this.w=[];this.b=[];this.init()}
+  init(){this.w=[];this.b=[];for(let i=0;i<this.a.length-1;i++){const r=this.a[i+1],c=this.a[i],s=Math.sqrt(2/c),w=[];for(let j=0;j*r;j++){const row=[];for(let k=0;k<c;k++)row.push((Math.random()*2-1)*s);w.push(row)}this.w.push(w);const b=[];for(let j=0;j<r;j++)b.push((Math.random()-.5)*.1);this.b.push(b)}}
+  f(x){this.as=[x];this.ps=[x];for(let l=0;l<this.w.length;l++){const p=[], rows=this.w[l].length;for(let r=0;r<rows;r++){let s=this.b[l][r];for(let c=0;c<this.w[l][r].length;c++)s+=this.w[l][r][c]*this.as[l][c];p.push(s)}this.ps.push(p);const a=p.map((v,i)=>l===this.w.length-1?v:Math.max(0,v));this.as.push(a)}return this.as[this.as.length-1]}
+  bwd(t,lr=.5){const L=this.w.length;let d=[this.as[L][0]-t[0]];for(let l=L-1;l>=0;l--){const nd=new Array(this.a[l]).fill(0);for(let r=0;r<this.w[l].length;r++){const dv=d[r];for(let c=0;c<this.w[l][r].length;c++){nd[c]+=dv*this.w[l][r][c];this.w[l][r][c]-=lr*dv*this.as[l][c]}this.b[l][r]-=lr*dv}if(l>0)d=nd.map((v,i)=>this.ps[l][i]>0?v:0)}}
+}
+let nn,training=false,epoch=0,lastLoss=1,drawData=new Float32Array(RES*RES);
+const dC=document.getElementById('dC'),dCtx=dC.getContext('2d');
+const oC=document.getElementById('oC'),oCtx=oC.getContext('2d');
+const nnC=document.getElementById('nnC'),nnCtx=nnC.getContext('2d');
+function resize(){[dC,oC,nnC].forEach(c=>{const r=c.parentElement.getBoundingClientRect();c.width=r.width*(window.devicePixelRatio||1);c.height=r.height*(window.devicePixelRatio||1);c.getContext('2d').scale(window.devicePixelRatio||1,window.devicePixelRatio||1)})}
+window.addEventListener('resize',resize);setTimeout(resize,100);
+let drawing=false,mode=1;
+dC.addEventListener('mousedown',e=>{drawing=true;mode=e.button===2?-1:1;e.preventDefault()});
+dC.addEventListener('mouseup',()=>drawing=false);
+dC.addEventListener('mouseleave',()=>drawing=false);
+dC.addEventListener('contextmenu',e=>e.preventDefault());
+dC.addEventListener('mousemove',e=>{
+  if(!drawing)return;
+  const r=dC.parentElement.getBoundingClientRect();
+  const cx=(e.clientX-r.left)/r.width*RES,cy=(e.clientY-r.top)/r.height*RES;
+  for(let dy=-2;dy<=2;dy++)for(let dx=-2;dx<=2;dx++){
+    const px=Math.floor(cx+dx),py=Math.floor(cy+dy);
+    if(px>=0&&px<RES&&py>=0&&py<RES){const d=Math.sqrt(dx*dx+dy*dy);drawData[py*RES+px]=Math.max(-1,Math.min(1,drawData[py*RES+px]+mode*Math.max(0,1-d/2)))}
+  }
+});
+function renderDraw(){
+  const r=dC.parentElement.getBoundingClientRect();
+  dCtx.fillStyle='#0d0d15';dCtx.fillRect(0,0,r.width,r.height);
+  const cw=r.width/RES,ch=r.height/RES;
+  for(let y=0;y<RES;y++)for(let x=0;x<RES;x++){const v=drawData[y*RES+x];if(Math.abs(v)>.05){dCtx.fillStyle=v>0?`rgba(0,255,100,${Math.abs(v)*.9})`:`rgba(255,50,50,${Math.abs(v)*.9})`;dCtx.fillRect(x*cw,y*ch,cw+1,ch+1)}}
+}
+function renderOut(){
+  const r=oC.parentElement.getBoundingClientRect(),cw=r.width/RES,ch=r.height/RES;
+  const img=oCtx.createImageData(RES,RES);
+  for(let y=0;y<RES;y++)for(let x=0;x<RES;x++){
+    const p=nn.f([x/(RES-1),y/(RES-1)])[0],v=Math.max(-1,Math.min(1,p)),i=(y*RES+x)*4;
+    if(v>0){img.data[i]=0;img.data[i+1]=Math.floor(v*255);img.data[i+2]=Math.floor(v*80)}else{img.data[i]=Math.floor(-v*255);img.data[i+1]=Math.floor(-v*50);img.data[i+2]=Math.floor(-v*50)}
+    img.data[i+3]=255;
+  }
+  const t=document.createElement('canvas');t.width=RES;t.height=RES;t.getContext('2d').putImageData(img,0,0);
+  oCtx.imageSmoothingEnabled=true;oCtx.drawImage(t,0,0,r.width,r.height);
+}
+function renderNN(){
+  const r=nnC.parentElement.getBoundingClientRect();nnCtx.clearRect(0,0,r.width,r.height);
+  const layers=nn.a,n=layers.length,padX=25,padY=15,w=r.width-2*padX,h=r.height-2*padY;
+  const lx=[];for(let i=0;i<n;i++)lx.push(padX+i*(w/(n-1)));
+  const nr=Math.min(5,h/Math.max(...layers)/2.5);
+  for(let l=0;l<n-1;l++)for(let j=0;j<layers[l+1];j++){
+    const y2=padY+(h/(layers[l+1]-1||1))*j;
+    for(let k=0;k<layers[l];k++){const y1=padY+(h/(layers[l]-1||1))*k,wt=nn.w[l][j][k],a=Math.min(.6,Math.abs(wt)*.8);nnCtx.strokeStyle=wt>0?`rgba(100,200,255,${a})`:`rgba(255,100,100,${a})`;nnCtx.lineWidth=Math.min(2.5,Math.abs(wt)*1.5);nnCtx.beginPath();nnCtx.moveTo(lx[l]+nr,y1);nnCtx.lineTo(lx[l+1]-nr,y2);nnCtx.stroke()}
+  }
+  for(let l=0;l<n;l++)for(let nd=0;nd<layers[l];nd++){
+    const y=padY+(h/(layers[l]-1||1))*nd;nnCtx.beginPath();nnCtx.arc(lx[l],y,nr,0,Math.PI*2);
+    const ac=l<nn.as.length?(nn.as[l][nd]||0):.5;
+    nnCtx.fillStyle=`rgba(100,180,255,${.3+Math.min(1,Math.abs(ac))*.7})`;nnCtx.fill();
+  }
+}
+function train(){
+  if(!training)return;
+  const samples=[];for(let y=0;y<RES;y++)for(let x=0;x<RES;x++){const v=drawData[y*RES+x];if(Math.abs(v)>.1)samples.push({i:[x/(RES-1),y/(RES-1)],t:[v]})}
+  if(samples.length<2)return;let tl=0;const lr=Math.max(.01,.5/(1+epoch*.001));
+  for(let i=0;i<samples.length;i++){const s=samples[Math.floor(Math.random()*samples.length)];const p=nn.f(s.i);let l=0;for(let j=0;j<p.length;j++)l+=(p[j]-s.t[j])**2;tl+=l/p.length;nn.bwd(s.t,lr)}
+  lastLoss=tl/samples.length;epoch++;
+  document.getElementById('ep').textContent=epoch;
+  document.getElementById('ls').textContent=lastLoss.toFixed(6);
+  renderOut();renderNN();requestAnimationFrame(train);
+}
+document.getElementById('bTrain').onclick=()=>{training=true;train()};
+document.getElementById('bPause').onclick=()=>training=false;
+document.getElementById('bReset').onclick=()=>{training=false;init()};
+document.getElementById('bClear').onclick=()=>{drawData=new Float32Array(RES*RES)};
+document.getElementById('arch').onchange=()=>{training=false;init()};
+function init(){const a=document.getElementById('arch').value.split(',').map(Number);nn=new NN(a);nn.init();epoch=0;lastLoss=1;document.getElementById('ep').textContent='0';document.getElementById('ls').textContent='—';renderNN();renderOut()}
+init();
+(function loop(){renderDraw();requestAnimationFrame(loop)})();
+let fc=0,lt=performance.now();setInterval(()=>{document.getElementById('fp').textContent=Math.round(fc*1000/(performance.now()-lt));fc=0;lt=performance.now()},1000);
+(function count(){fc++;requestAnimationFrame(count)})();
+</script>
+</body>
+</html>
